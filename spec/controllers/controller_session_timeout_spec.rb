@@ -162,5 +162,70 @@ describe SorceryController, type: :controller do
 
       subject.send(:after_remember_me!, user)
     end
+
+    context 'with remember_me module enable' do
+      let(:config_session_timeout) { 0.5 }
+
+      before(:example) do
+        if SORCERY_ORM == :active_record
+          MigrationHelper.migrate("#{Rails.root}/db/migrate/remember_me")
+          User.reset_column_information
+        end
+
+        sorcery_reload!([:remember_me, :session_timeout])
+        sorcery_controller_property_set(:session_timeout, config_session_timeout)
+
+        # Config for remember_me module
+        allow(user).to receive(:remember_me_token)
+        allow(user).to receive(:remember_me_token_expires_at)
+        allow(user).to receive_message_chain(:sorcery_config, :remember_me_token_attribute_name).and_return(:remember_me_token)
+        allow(user).to receive_message_chain(:sorcery_config, :remember_me_token_expires_at_attribute_name).and_return(:remember_me_token_expires_at)
+      end
+
+      after(:example) do
+        if SORCERY_ORM == :active_record
+          MigrationHelper.rollback("#{Rails.root}/db/migrate/remember_me")
+        end
+
+        sorcery_reload!([:session_timeout])
+      end
+
+      context 'after session timeout' do
+        it 'resets session and remember_me' do
+          expect(User).to receive(:authenticate).with("bla@bla.com", "secret", "1") { |&block| block.call(user, nil) }
+          expect(user).to receive(:remember_me!)
+          expect(user).to receive(:remember_me_token).and_return('abracadabra')
+
+          post :test_login_with_remember_in_login, params: { email: 'bla@bla.com', password: 'secret', remember: '1' }
+
+          Timecop.travel(Time.now.in_time_zone + config_session_timeout + 0.1)
+
+          get :test_login_from_cookie
+
+          # Expect logout is called
+          expect(user).to receive(:logout)
+
+          expect(cookies['remember_me_token']).to be_nil
+          expect(session[:user_id]).to be_nil
+        end
+      end
+
+      context 'before session timeout' do
+        it 'does not resets session and remember_me cookies' do
+          expect(User).to receive(:authenticate).with('bla@bla.com', 'secret', '1') { |&block| block.call(user, nil) }
+          expect(user).to receive(:remember_me!)
+          expect(user).to receive(:remember_me_token).and_return('abracadabra')
+
+          post :test_login_with_remember_in_login, params: { email: 'bla@bla.com', password: 'secret', remember: '1' }
+
+          Timecop.travel(Time.now.in_time_zone + config_session_timeout - 0.1)
+
+          get :test_login_from_cookie
+
+          expect(cookies['remember_me_token']).to be_present
+          expect(session[:user_id]).to be_present
+        end
+      end
+    end
   end
 end
